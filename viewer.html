@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Visor · Libro PDF</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/page-flip@2.0.7/dist/css/page-flip.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/page-flip@2.0.7/dist/js/page-flip.browser.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.5.136/build/pdf.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.5.136/build/pdf.worker.min.js"></script>
+  <style>
+    :root { --bg:#0b0c10; --fg:#e8e8e8; --muted:#b6b6b6; --accent:#6ee7b7; --border:rgba(255,255,255,.1); }
+    *{ box-sizing:border-box } html, body { height:100% }
+    body {
+      margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, 'Helvetica Neue', Arial, 'Noto Sans';
+      color: var(--fg); background: radial-gradient(1200px 600px at 50% -10%, #1b1f28 0%, var(--bg) 60%);
+      display:flex; flex-direction:column; gap:12px;
+    }
+    header {
+      padding: 10px 12px; display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:space-between;
+      background: rgba(255,255,255,0.04); border-bottom:1px solid var(--border); backdrop-filter: blur(6px);
+      position: sticky; top:0; z-index:50;
+    }
+    h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; }
+    .btn{
+      appearance:none; border:1px solid var(--border); background: rgba(255,255,255,.06);
+      color:var(--fg); padding:8px 12px; border-radius:12px; cursor:pointer; font-weight:600;
+      transition: transform .08s ease, background .2s ease, border-color .2s ease;
+    }
+    .btn:hover{ background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.24); }
+    input[type="number"], input[type="text"]{
+      background: rgba(255,255,255,0.06); color: var(--fg); border: 1px solid var(--border);
+      padding: 8px 10px; border-radius: 12px; outline: none; min-width: 0; width: 110px;
+    }
+    .viewport{ flex:1; display:grid; place-items:center; padding:10px; min-height:0 }
+    #book{
+      width:min(100%, 1100px);
+      height: calc(100vh - 110px);
+      box-shadow: 0 20px 80px rgba(0,0,0,.45);
+      border-radius: 16px; overflow: hidden; background: #0f1218; position: relative;
+    }
+    .controls{
+      position:absolute; bottom:12px; left:50%; transform:translateX(-50%);
+      display:flex; gap:10px; z-index:20; backdrop-filter: blur(6px);
+      background: rgba(0,0,0,.35); padding: 8px; border-radius: 12px; border: 1px solid var(--border);
+    }
+    .page-number{ font-variant-numeric: tabular-nums; color: var(--muted) }
+    .loader { display:none; gap:8px; align-items:center; color: var(--muted) }
+    .loader.show { display:inline-flex }
+    .spinner { width:16px; height:16px; border-radius:50%; border:2px solid rgba(255,255,255,.25); border-top-color: var(--accent); animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .hint { position:absolute; top:10px; right:10px; color:var(--muted); font-size:12px; opacity:.8 }
+    .back { text-decoration:none; color:var(--fg) }
+  </style>
+</head>
+<body>
+  <header>
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap">
+      <a class="back btn" href="index.html">← Biblioteca</a>
+      <h1 id="title">Visor</h1>
+      <div class="loader" id="loader"><span class="spinner"></span> <span id="status">Cargando…</span></div>
+    </div>
+    <div style="display:flex; gap:12px; align-items:center">
+      <label for="dpiInput" style="color:var(--muted); font-size:12px">Resolución</label>
+      <input type="number" id="dpiInput" value="150" min="72" max="240" />
+      <button class="btn" id="reloadBtn">Recargar</button>
+    </div>
+  </header>
+
+  <div class="viewport">
+    <div id="book"></div>
+  </div>
+
+  <script>
+    function getParam(name){
+      const url = new URL(location.href);
+      return url.searchParams.get(name);
+    }
+    const srcParam = getParam('src');
+    const titleParam = getParam('title');
+
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.5.136/build/pdf.worker.min.js";
+
+    const dpiInput  = document.getElementById('dpiInput');
+    const reloadBtn = document.getElementById('reloadBtn');
+    const bookEl    = document.getElementById('book');
+    const loader    = document.getElementById('loader');
+    const statusTxt = document.getElementById('status');
+    const titleEl   = document.getElementById('title');
+
+    if(titleParam) titleEl.textContent = titleParam;
+
+    let flip;
+
+    function showLoading(msg){ statusTxt.textContent = msg || 'Cargando…'; loader.classList.add('show'); }
+    function hideLoading(){ loader.classList.remove('show'); }
+    function canvasToDataURL(canvas){ return canvas.toDataURL('image/jpeg', 0.92); }
+
+    async function renderPdfToImages(src, ppi=150){
+      showLoading('Cargando PDF…');
+      const loadingTask = pdfjsLib.getDocument(src);
+      const pdf = await loadingTask.promise;
+      const images = [];
+      const baseDPI = 96;
+      const scale = ppi / baseDPI;
+      for(let i=1; i<=pdf.numPages; i++){
+        statusTxt.textContent = `Renderizando página ${i} / ${pdf.numPages}…`;
+        const page = await pdf.getPage(i);
+        const viewport = page.getViewport({ scale });
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        await page.render({ canvasContext: ctx, viewport }).promise;
+        images.push({ width: canvas.width, height: canvas.height, dataUrl: canvasToDataURL(canvas) });
+      }
+      hideLoading();
+      return images;
+    }
+
+    function initFlipbook(pages){
+      bookEl.innerHTML = '';
+      if(flip){ try{ flip.destroy(); }catch(e){} }
+      const bookInner = document.createElement('div');
+      bookInner.className = 'my-book';
+      bookEl.appendChild(bookInner);
+      pages.forEach((p, idx)=>{
+        const pageEl = document.createElement('div');
+        pageEl.className = 'page';
+        pageEl.style.width = p.width + 'px';
+        pageEl.style.height = p.height + 'px';
+        const img = document.createElement('img');
+        img.loading = 'lazy'; img.decoding = 'async';
+        img.src = p.dataUrl; img.alt = `Página ${idx+1}`;
+        img.style.width = '100%'; img.style.height = '100%'; img.style.objectFit = 'contain';
+        pageEl.appendChild(img); bookInner.appendChild(pageEl);
+      });
+      const avg = pages.reduce((a,p)=>({w:a.w+p.width, h:a.h+p.height}), {w:0,h:0});
+      const avgRatio = (avg.h/pages.length) / (avg.w/pages.length);
+      flip = new St.PageFlip(bookEl, {
+        width: Math.min(500, bookEl.clientWidth/2),
+        height: Math.min(Math.round(avgRatio * Math.min(500, bookEl.clientWidth/2)), bookEl.clientHeight - 20),
+        size: 'stretch',
+        minWidth: 315, maxWidth: 2000, minHeight: 200, maxHeight: 2500,
+        showCover: true,
+        mobileScrollSupport: true,
+        maxShadowOpacity: 0.2,
+        usePortrait: window.innerWidth < 768,
+        disableFlipByClick: false,
+      });
+      flip.loadFromHTML(bookInner.children);
+      addControls();
+      window.addEventListener('keydown', (e)=>{
+        if(!flip) return;
+        if(e.key==='ArrowRight') flip.flipNext();
+        if(e.key==='ArrowLeft') flip.flipPrev();
+        if(e.key==='Home') flip.flip(0);
+        if(e.key==='End') flip.flip(flip.getPageCount()-1);
+      });
+      window.addEventListener('resize', ()=>{ try{ flip.update(); }catch(_){} });
+    }
+
+    function addControls(){
+      const old = bookEl.querySelector('.controls'); if(old) old.remove();
+      const controls = document.createElement('div'); controls.className='controls';
+      const prevBtn = document.createElement('button'); prevBtn.className='btn'; prevBtn.textContent='⟵ Anterior'; prevBtn.onclick=()=>flip&&flip.flipPrev();
+      const nextBtn = document.createElement('button'); nextBtn.className='btn'; nextBtn.textContent='Siguiente ⟶'; nextBtn.onclick=()=>flip&&flip.flipNext();
+      const pageNum = document.createElement('span'); pageNum.className='page-number'; pageNum.textContent='1 / 1';
+      if(flip){
+        const updateNum = ()=>{ const c=flip.getCurrentPageIndex()+1; const t=flip.getPageCount(); pageNum.textContent = `${c} / ${t}`; };
+        flip.on('flip', updateNum); setTimeout(updateNum, 0);
+      }
+      controls.appendChild(prevBtn); controls.appendChild(pageNum); controls.appendChild(nextBtn);
+      bookEl.appendChild(controls);
+      const hint = document.createElement('div'); hint.className='hint'; hint.textContent='Consejo: deslice o toque las esquinas para pasar página.';
+      bookEl.appendChild(hint);
+    }
+
+    async function loadFromParam(){
+      try{
+        const ppi = parseInt(dpiInput.value,10) || 150;
+        if(!srcParam){ alert('Falta el parámetro ?src= con la URL del PDF.'); return; }
+        const pages = await renderPdfToImages(srcParam, ppi);
+        initFlipbook(pages);
+      }catch(err){
+        console.error(err); hideLoading(); alert('No se pudo cargar el PDF. Verifica la URL.');
+      }
+    }
+
+    reloadBtn.addEventListener('click', loadFromParam);
+    document.addEventListener('DOMContentLoaded', loadFromParam);
+  </script>
+</body>
+</html>
