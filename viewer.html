@@ -28,7 +28,7 @@
       transition: transform .08s ease, background .2s ease, border-color .2s ease;
     }
     .btn:hover{ background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.24); }
-    input[type="number"], input[type="text"]{
+    input[type="number"]{
       background: rgba(255,255,255,0.06); color: var(--fg); border: 1px solid var(--border);
       padding: 8px 10px; border-radius: 12px; outline: none; min-width: 0; width: 110px;
     }
@@ -51,6 +51,7 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     .hint { position:absolute; top:10px; right:10px; color:var(--muted); font-size:12px; opacity:.8 }
     .back { text-decoration:none; color:var(--fg) }
+    .error { color:#ffb4b4; font-size:13px; margin-left:10px }
   </style>
 </head>
 <body>
@@ -59,6 +60,7 @@
       <a class="back btn" href="index.html">← Biblioteca</a>
       <h1 id="title">Visor</h1>
       <div class="loader" id="loader"><span class="spinner"></span> <span id="status">Cargando…</span></div>
+      <div id="errmsg" class="error"></div>
     </div>
     <div style="display:flex; gap:12px; align-items:center">
       <label for="dpiInput" style="color:var(--muted); font-size:12px">Resolución</label>
@@ -87,35 +89,44 @@
     const loader    = document.getElementById('loader');
     const statusTxt = document.getElementById('status');
     const titleEl   = document.getElementById('title');
+    const errEl     = document.getElementById('errmsg');
 
     if(titleParam) titleEl.textContent = titleParam;
 
     let flip;
 
-    function showLoading(msg){ statusTxt.textContent = msg || 'Cargando…'; loader.classList.add('show'); }
+    function showLoading(msg){ statusTxt.textContent = msg || 'Cargando…'; loader.classList.add('show'); errEl.textContent=''; }
     function hideLoading(){ loader.classList.remove('show'); }
     function canvasToDataURL(canvas){ return canvas.toDataURL('image/jpeg', 0.92); }
 
     async function renderPdfToImages(src, ppi=150){
       showLoading('Cargando PDF…');
-      const loadingTask = pdfjsLib.getDocument(src);
-      const pdf = await loadingTask.promise;
-      const images = [];
-      const baseDPI = 96;
-      const scale = ppi / baseDPI;
-      for(let i=1; i<=pdf.numPages; i++){
-        statusTxt.textContent = `Renderizando página ${i} / ${pdf.numPages}…`;
-        const page = await pdf.getPage(i);
-        const viewport = page.getViewport({ scale });
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        canvas.width = Math.floor(viewport.width);
-        canvas.height = Math.floor(viewport.height);
-        await page.render({ canvasContext: ctx, viewport }).promise;
-        images.push({ width: canvas.width, height: canvas.height, dataUrl: canvasToDataURL(canvas) });
+      const abs = new URL(src, location.href).href; // asegura absoluto y maneja espacios
+      try{
+        const loadingTask = pdfjsLib.getDocument(abs);
+        const pdf = await loadingTask.promise;
+        const images = [];
+        const baseDPI = 96;
+        const scale = ppi / baseDPI;
+        for(let i=1; i<=pdf.numPages; i++){
+          statusTxt.textContent = `Renderizando página ${i} / ${pdf.numPages}…`;
+          const page = await pdf.getPage(i);
+          const viewport = page.getViewport({ scale });
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          canvas.width = Math.floor(viewport.width);
+          canvas.height = Math.floor(viewport.height);
+          await page.render({ canvasContext: ctx, viewport }).promise;
+          images.push({ width: canvas.width, height: canvas.height, dataUrl: canvasToDataURL(canvas) });
+        }
+        hideLoading();
+        return images;
+      }catch(e){
+        hideLoading();
+        console.error('PDF load error:', e);
+        errEl.textContent = 'Error: no se pudo cargar el PDF. Revisa la URL, publicación en Pages y CORS.';
+        throw e;
       }
-      hideLoading();
-      return images;
     }
 
     function initFlipbook(pages){
@@ -179,11 +190,11 @@
     async function loadFromParam(){
       try{
         const ppi = parseInt(dpiInput.value,10) || 150;
-        if(!srcParam){ alert('Falta el parámetro ?src= con la URL del PDF.'); return; }
+        if(!srcParam){ errEl.textContent='Falta el parámetro ?src= con la URL del PDF.'; return; }
         const pages = await renderPdfToImages(srcParam, ppi);
         initFlipbook(pages);
       }catch(err){
-        console.error(err); hideLoading(); alert('No se pudo cargar el PDF. Verifica la URL.');
+        // ya mostrado
       }
     }
 
